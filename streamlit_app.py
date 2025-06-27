@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 # Configuration de la page Streamlit
 st.set_page_config(
     page_title="Analyse des Prénoms en France (1900-2020)",
-    page_icon="👶",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -289,17 +289,87 @@ def show_geographic_analysis(df, geo_df):
     idx_max = top_by_dept.groupby('dpt')['count'].idxmax()
     top_by_dept = top_by_dept.loc[idx_max].reset_index(drop=True)
     
-    # Affichage de la carte (version simplifiée avec un tableau)
-    st.markdown(f"### Prénom le plus populaire par département en {selected_year}")
-    
-    # Tableau des résultats
-    display_data = top_by_dept.copy()
-    if not geo_df.empty:
-        display_data = display_data.merge(geo_df[['dpt', 'nom']], on='dpt', how='left')
-        display_data = display_data[['dpt', 'nom', 'name', 'count']].sort_values('count', ascending=False)
-        display_data.columns = ['Code Dept.', 'Département', 'Prénom le + populaire', 'Nombre de naissances']
-    
-    st.dataframe(display_data, use_container_width=True)
+    # Carte de France avec prénoms populaires
+    st.markdown(
+        f"### Carte des prénoms les plus populaires par département en {selected_year}")
+
+    # Préparation des données pour la carte
+    map_geo_data = geo_df.merge(top_by_dept, on='dpt', how='left')
+    map_geo_data['count'] = map_geo_data['count'].fillna(0)
+    map_geo_data['name'] = map_geo_data['name'].fillna('Aucun')
+
+    try:
+        # Création de la carte choroplèthe de France uniquement
+        fig_map = go.Figure()
+
+        # Ajout de la carte choroplèthe
+        fig_map.add_trace(go.Choropleth(
+            geojson=geo_df.__geo_interface__,
+            locations=map_geo_data['dpt'],
+            z=map_geo_data['count'],
+            colorscale='Viridis',
+            featureidkey="properties.dpt",
+            text=map_geo_data['name'],  # Prénoms affichés sur la carte
+            hovertemplate='<b>%{hovertext}</b><br>' +
+                         'Département: %{location}<br>' +
+                         'Prénom: %{text}<br>' +
+                         'Naissances: %{z:,}<extra></extra>',
+            hovertext=map_geo_data['nom'],
+            colorbar=dict(
+                title="Nombre de<br>naissances"
+            ),
+            showscale=True
+        ))
+
+        # Configuration de la carte pour afficher uniquement la France
+        fig_map.update_geos(
+            projection_type="natural earth",
+            showlakes=False,
+            showocean=False,
+            showland=False,
+            showcoastlines=False,
+            showframe=False,
+            fitbounds="geojson",
+            bgcolor="white"
+        )
+
+        fig_map.update_layout(
+            title=f"Prénoms les plus populaires par département - {selected_year}",
+            title_x=0.5,
+            height=700,
+            margin={"r": 0, "t": 50, "l": 0, "b": 0},
+            geo=dict(
+                bgcolor="white",
+                projection=dict(
+                    type="natural earth"
+                )
+            )
+        )
+
+        st.plotly_chart(fig_map, use_container_width=True)
+
+        # Ajout d'informations utiles
+        st.info(
+            "💡 Survolez les départements pour voir le prénom le plus populaire et le nombre de naissances")
+
+    except Exception as e:
+        st.error(f"Erreur lors de l'affichage de la carte: {e}")
+        st.info("Affichage d'un graphique alternatif")
+
+        # Graphique en barres comme alternative
+        fig_bar = px.bar(
+            top_by_dept.nlargest(20, 'count'),
+            x='count',
+            y='dpt',
+            orientation='h',
+            title=f"Top 20 des départements par nombre de naissances en {selected_year}",
+            labels={'count': 'Nombre de naissances', 'dpt': 'Département'},
+            text='name',
+            color='count',
+            color_continuous_scale='Viridis'
+        )
+        fig_bar.update_layout(height=600)
+        st.plotly_chart(fig_bar, use_container_width=True)
     
     # Graphique des départements avec le plus de naissances
     top_depts = top_by_dept.nlargest(15, 'count')
@@ -311,7 +381,9 @@ def show_geographic_analysis(df, geo_df):
         orientation='h',
         title=f"Top 15 des départements par nombre de naissances en {selected_year}",
         labels={'count': 'Nombre de naissances', 'dpt': 'Département'},
-        text='name'
+        text='name',
+        color='count',
+        color_continuous_scale='Viridis'
     )
     fig.update_layout(height=600)
     st.plotly_chart(fig, use_container_width=True)
@@ -560,31 +632,139 @@ def show_name_search(df, geo_df):
     with col3:
         st.metric("Naissances au pic", f"{peak_count:,}")
     
-    # Top départements
+    # Répartition géographique
     st.markdown("### Répartition géographique")
     
-    dept_data = name_data.groupby('dpt')['count'].sum().sort_values(ascending=False).head(10)
-    
-    if geo_df is not None:
-        dept_names = []
-        for dept in dept_data.index:
-            if dept in geo_df['dpt'].values:
-                dept_name = geo_df[geo_df['dpt'] == dept]['nom'].iloc[0]
-                dept_names.append(f"{dept} - {dept_name}")
+    dept_data = name_data.groupby(
+        'dpt')['count'].sum().sort_values(ascending=False)
+
+    # Carte de répartition du prénom
+    if geo_df is not None and not dept_data.empty:
+        # Préparer les données pour la carte
+        map_name_data = geo_df.merge(
+            dept_data.reset_index().rename(
+                columns={'count': f'count_{name_title}'}),
+            on='dpt',
+            how='left'
+        )
+        map_name_data[f'count_{name_title}'] = map_name_data[f'count_{name_title}'].fillna(
+            0)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            try:
+                # Carte choroplèthe du prénom (France uniquement)
+                fig_name_map = go.Figure()
+
+                fig_name_map.add_trace(go.Choropleth(
+                    geojson=geo_df.__geo_interface__,
+                    locations=map_name_data['dpt'],
+                    z=map_name_data[f'count_{name_title}'],
+                    colorscale='Blues',
+                    featureidkey="properties.dpt",
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                 'Département: %{location}<br>' +
+                                 f"Naissances '{name_title}': " +
+                    '%{z:,}<extra></extra>',
+                    hovertext=map_name_data['nom'],
+                    colorbar=dict(
+                        title=f"Naissances<br>'{name_title}'"
+                    ),
+                    showscale=True
+                ))
+
+                # Configuration pour afficher uniquement la France
+                fig_name_map.update_geos(
+                    projection_type="natural earth",
+                    showlakes=False,
+                    showocean=False,
+                    showland=False,
+                    showcoastlines=False,
+                    showframe=False,
+                    fitbounds="geojson",
+                    bgcolor="white"
+                )
+
+                fig_name_map.update_layout(
+                    title=f"Répartition géographique - '{name_title}'",
+                    title_x=0.5,
+                    height=500,
+                    margin={"r": 0, "t": 50, "l": 0, "b": 0},
+                    geo=dict(
+                        bgcolor="white",
+                        projection=dict(
+                            type="natural earth"
+                        )
+                    )
+                )
+
+                st.plotly_chart(fig_name_map, use_container_width=True)
+
+            except Exception as e:
+                st.warning(
+                    "Carte non disponible, affichage du graphique en barres")
+                # Fallback vers le graphique en barres
+                dept_data_top10 = dept_data.head(10)
+                dept_names = []
+                for dept in dept_data_top10.index:
+                    if dept in geo_df['dpt'].values:
+                        dept_name = geo_df[geo_df['dpt']
+                                           == dept]['nom'].iloc[0]
+                        dept_names.append(f"{dept} - {dept_name}")
+                    else:
+                        dept_names.append(f"Département {dept}")
+
+                fig = px.bar(
+                    x=dept_data_top10.values,
+                    y=dept_names,
+                    orientation='h',
+                    title=f"Top 10 des départements pour '{name_title}'",
+                    labels={'x': 'Nombre de naissances', 'y': 'Département'}
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            # Top 10 en barres pour comparaison
+            dept_data_top10 = dept_data.head(10)
+            if geo_df is not None:
+                dept_names = []
+                for dept in dept_data_top10.index:
+                    if dept in geo_df['dpt'].values:
+                        dept_name = geo_df[geo_df['dpt']
+                                           == dept]['nom'].iloc[0]
+                        dept_names.append(f"{dept} - {dept_name}")
+                    else:
+                        dept_names.append(f"Département {dept}")
             else:
-                dept_names.append(f"Département {dept}")
+                dept_names = [
+                    f"Département {dept}" for dept in dept_data_top10.index]
+
+            fig = px.bar(
+                x=dept_data_top10.values,
+                y=dept_names,
+                orientation='h',
+                title=f"Top 10 des départements pour '{name_title}'",
+                labels={'x': 'Nombre de naissances', 'y': 'Département'},
+                color=dept_data_top10.values,
+                color_continuous_scale='Blues'
+            )
+            fig.update_layout(height=500, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
     else:
-        dept_names = [f"Département {dept}" for dept in dept_data.index]
-    
-    fig = px.bar(
-        x=dept_data.values,
-        y=dept_names,
-        orientation='h',
-        title=f"Top 10 des départements pour le prénom '{name_title}'",
-        labels={'x': 'Nombre de naissances', 'y': 'Département'}
-    )
-    fig.update_layout(height=400)
-    st.plotly_chart(fig, use_container_width=True)
+        # Affichage simple si pas de données géographiques
+        dept_data_top10 = dept_data.head(10)
+        fig = px.bar(
+            x=dept_data_top10.values,
+            y=[f"Département {dept}" for dept in dept_data_top10.index],
+            orientation='h',
+            title=f"Top 10 des départements pour le prénom '{name_title}'",
+            labels={'x': 'Nombre de naissances', 'y': 'Département'}
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
